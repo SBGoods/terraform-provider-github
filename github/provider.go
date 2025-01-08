@@ -21,76 +21,58 @@ func Provider() *schema.Provider {
 			"token": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("GITHUB_TOKEN", nil),
 				Description: descriptions["token"],
 			},
 			"owner": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("GITHUB_OWNER", nil),
 				Description: descriptions["owner"],
 			},
 			"retryable_errors": {
-				Type:     schema.TypeList,
-				Elem:     &schema.Schema{Type: schema.TypeInt},
-				Optional: true,
-				DefaultFunc: func() (interface{}, error) {
-					defaultErrors := []int{500, 502, 503, 504}
-					errorInterfaces := make([]interface{}, len(defaultErrors))
-					for i, v := range defaultErrors {
-						errorInterfaces[i] = v
-					}
-					return errorInterfaces, nil
-				},
+				Type:        schema.TypeList,
+				Elem:        &schema.Schema{Type: schema.TypeInt},
+				Optional:    true,
 				Description: descriptions["retryable_errors"],
 			},
 			"max_retries": {
 				Type:        schema.TypeInt,
 				Optional:    true,
-				Default:     3,
 				Description: descriptions["max_retries"],
 			},
 			"organization": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("GITHUB_ORGANIZATION", nil),
 				Description: descriptions["organization"],
 				Deprecated:  "Use owner (or GITHUB_OWNER) instead of organization (or GITHUB_ORGANIZATION)",
 			},
 			"base_url": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				DefaultFunc: schema.EnvDefaultFunc("GITHUB_BASE_URL", "https://api.github.com/"),
 				Description: descriptions["base_url"],
 			},
 			"insecure": {
 				Type:        schema.TypeBool,
 				Optional:    true,
-				Default:     false,
 				Description: descriptions["insecure"],
 			},
 			"write_delay_ms": {
 				Type:        schema.TypeInt,
 				Optional:    true,
-				Default:     1000,
 				Description: descriptions["write_delay_ms"],
 			},
 			"read_delay_ms": {
 				Type:        schema.TypeInt,
 				Optional:    true,
-				Default:     0,
 				Description: descriptions["read_delay_ms"],
 			},
 			"retry_delay_ms": {
 				Type:        schema.TypeInt,
 				Optional:    true,
-				Default:     1000,
 				Description: descriptions["retry_delay_ms"],
 			},
 			"parallel_requests": {
 				Type:        schema.TypeBool,
 				Optional:    true,
-				Default:     false,
 				Description: descriptions["parallel_requests"],
 			},
 			"app_auth": {
@@ -103,20 +85,17 @@ func Provider() *schema.Provider {
 						"id": {
 							Type:        schema.TypeString,
 							Required:    true,
-							DefaultFunc: schema.EnvDefaultFunc("GITHUB_APP_ID", nil),
 							Description: descriptions["app_auth.id"],
 						},
 						"installation_id": {
 							Type:        schema.TypeString,
 							Required:    true,
-							DefaultFunc: schema.EnvDefaultFunc("GITHUB_APP_INSTALLATION_ID", nil),
 							Description: descriptions["app_auth.installation_id"],
 						},
 						"pem_file": {
 							Type:        schema.TypeString,
 							Required:    true,
 							Sensitive:   true,
-							DefaultFunc: schema.EnvDefaultFunc("GITHUB_APP_PEM_FILE", nil),
 							Description: descriptions["app_auth.pem_file"],
 						},
 					},
@@ -308,9 +287,31 @@ func init() {
 
 func providerConfigure(p *schema.Provider) schema.ConfigureContextFunc {
 	return func(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-		owner := d.Get("owner").(string)
-		baseURL := d.Get("base_url").(string)
-		token := d.Get("token").(string)
+		// Default Values
+		baseURL := "https://api.github.com/"
+		token := os.Getenv("GITHUB_TOKEN")
+		owner := os.Getenv("GITHUB_OWNER")
+		maxRetries := 3
+		org := os.Getenv("GITHUB_ORGANIZATION")
+		if baseURL := os.Getenv("GITHUB_ORGANIZATION"); baseURL == "" {
+			baseURL = "https://api.github.com/"
+		}
+		writeDelay := 1000
+		readDelay := 0
+		retryDelay := 1000
+		appID := os.Getenv("GITHUB_APP_ID")
+		appInstallationID := os.Getenv("GITHUB_APP_INSTALLATION_ID")
+		appPemFile := os.Getenv("GITHUB_APP_PEM_FILE")
+
+		if ownerVal, ok := d.GetOk("owner"); ok {
+			owner = ownerVal.(string)
+		}
+		if tokenVal, ok := d.GetOk("token"); ok {
+			token = tokenVal.(string)
+		}
+		if baseURLVal, ok := d.GetOk("base_url"); ok {
+			baseURL = baseURLVal.(string)
+		}
 		insecure := d.Get("insecure").(bool)
 
 		// BEGIN backwards compatibility
@@ -329,7 +330,9 @@ func providerConfigure(p *schema.Provider) schema.ConfigureContextFunc {
 		}
 		// END backwards compatibility
 
-		org := d.Get("organization").(string)
+		if orgVal, ok := d.GetOk("organization"); ok {
+			org = orgVal.(string)
+		}
 		if org != "" {
 			log.Printf("[INFO] Selecting organization attribute as owner: %s", org)
 			owner = org
@@ -337,8 +340,6 @@ func providerConfigure(p *schema.Provider) schema.ConfigureContextFunc {
 
 		if appAuth, ok := d.Get("app_auth").([]interface{}); ok && len(appAuth) > 0 && appAuth[0] != nil {
 			appAuthAttr := appAuth[0].(map[string]interface{})
-
-			var appID, appInstallationID, appPemFile string
 
 			if v, ok := appAuthAttr["id"].(string); ok && v != "" {
 				appID = v
@@ -386,25 +387,33 @@ func providerConfigure(p *schema.Provider) schema.ConfigureContextFunc {
 			token = ghAuthToken
 		}
 
-		writeDelay := d.Get("write_delay_ms").(int)
+		if writeDelayVal, ok := d.GetOk("write_delay_ms"); ok {
+			writeDelay = writeDelayVal.(int)
+		}
 		if writeDelay <= 0 {
 			return nil, wrapErrors([]error{fmt.Errorf("write_delay_ms must be greater than 0ms")})
 		}
 		log.Printf("[INFO] Setting write_delay_ms to %d", writeDelay)
 
-		readDelay := d.Get("read_delay_ms").(int)
+		if readDelayVal, ok := d.GetOk("read_delay_ms"); ok {
+			readDelay = readDelayVal.(int)
+		}
 		if readDelay < 0 {
 			return nil, wrapErrors([]error{fmt.Errorf("read_delay_ms must be greater than or equal to 0ms")})
 		}
 		log.Printf("[DEBUG] Setting read_delay_ms to %d", readDelay)
 
-		retryDelay := d.Get("read_delay_ms").(int)
+		if retryDelayVal, ok := d.GetOk("retry_delay_ms"); ok {
+			retryDelay = retryDelayVal.(int)
+		}
 		if retryDelay < 0 {
 			return nil, diag.FromErr(fmt.Errorf("retry_delay_ms must be greater than or equal to 0ms"))
 		}
 		log.Printf("[DEBUG] Setting retry_delay_ms to %d", retryDelay)
 
-		maxRetries := d.Get("max_retries").(int)
+		if maxRetriesVal, ok := d.GetOk("max_retries"); ok {
+			maxRetries = maxRetriesVal.(int)
+		}
 		if maxRetries < 0 {
 			return nil, diag.FromErr(fmt.Errorf("max_retries must be greater than or equal to 0"))
 		}
