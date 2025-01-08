@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -11,6 +12,7 @@ import (
 )
 
 var _ provider.Provider = &fwprovider{}
+var _ provider.ProviderWithEphemeralResources = &fwprovider{}
 
 // New returns a new, initialized Terraform Plugin Framework-style provider instance.
 // The provider instance is fully configured once the `Configure` method has been called.
@@ -130,4 +132,10 @@ func (f *fwprovider) DataSources(ctx context.Context) []func() datasource.DataSo
 
 func (f *fwprovider) Resources(ctx context.Context) []func() resource.Resource {
 	return nil
+}
+
+func (f *fwprovider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		NewEncryptValueEphemeralResource,
+	}
 }
