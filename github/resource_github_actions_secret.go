@@ -3,12 +3,14 @@ package github
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/google/go-github/v66/github"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"golang.org/x/crypto/nacl/box"
 )
@@ -41,7 +43,16 @@ func resourceGithubActionsSecret() *schema.Resource {
 				ForceNew:      true,
 				Optional:      true,
 				Sensitive:     true,
-				ConflictsWith: []string{"plaintext_value"},
+				ConflictsWith: []string{"plaintext_value", "write_only_encrypted_value"},
+				Description:   "Encrypted value of the secret using the GitHub public key in Base64 format.",
+			},
+			"write_only_encrypted_value": {
+				Type:          schema.TypeString,
+				ForceNew:      true,
+				WriteOnly:     true,
+				Optional:      true,
+				Sensitive:     true,
+				ConflictsWith: []string{"plaintext_value", "encrypted_value"},
 				Description:   "Encrypted value of the secret using the GitHub public key in Base64 format.",
 			},
 			"plaintext_value": {
@@ -49,7 +60,7 @@ func resourceGithubActionsSecret() *schema.Resource {
 				ForceNew:      true,
 				Optional:      true,
 				Sensitive:     true,
-				ConflictsWith: []string{"encrypted_value"},
+				ConflictsWith: []string{"encrypted_value", "write_only_encrypted_value"},
 				Description:   "Plaintext value of the secret to be encrypted.",
 			},
 			"created_at": {
@@ -81,7 +92,17 @@ func resourceGithubActionsSecretCreateOrUpdate(d *schema.ResourceData, meta inte
 		return err
 	}
 
-	if encryptedText, ok := d.GetOk("encrypted_value"); ok {
+	woVal, diags := d.GetRawConfigAt(cty.GetAttrPath("write_only_encrypted_value"))
+	if diags.HasError() {
+		return errors.New(diags[0].Summary + "\n" + diags[0].Detail)
+	}
+	if !woVal.Type().Equals(cty.String) {
+		return errors.New("error retrieving write-only attribute: write_only_encrypted_value - retrieved config value is not a string")
+	}
+
+	if !woVal.IsNull() {
+		encryptedValue = woVal.AsString()
+	} else if encryptedText, ok := d.GetOk("encrypted_value"); ok {
 		encryptedValue = encryptedText.(string)
 	} else {
 		encryptedBytes, err := encryptPlaintext(plaintextValue, publicKey)
